@@ -1,0 +1,70 @@
+#!/bin/sh
+set -euo pipefail
+
+# Host name vars
+FQDN_NAME=
+HOST_NAME=
+UPPER_HOST_NAME=
+
+# Temp krb cache vars
+TMP_KRB_CCACHE_NAME=
+DOMAIN_REALM=
+
+# To uppercase
+upper()
+{
+    echo -n "$1" | tr '[[:lower:]]' '[[:upper:]]'
+}
+
+# Check net is installed
+check_req()
+{
+    net --help  >/dev/null 2>&1 || ( echo "Error: net not installed" && exit 1)
+}
+
+get_domain_realm()
+{
+    DOMAIN_REALM="$(upper "$(dnsdomainname)")"
+
+    #"$(net ads info | grep Realm | awk 'NF>1{print $NF}')" || \
+    #                                          (echo "$DOMAIN_REALM" && exit 1)
+}
+
+get_host_name()
+{
+    FQDN_NAME="$(hostname -f)"
+    #HOST_NAME="$(hostname -s)"
+    UPPER_HOST_NAME="$(upper "$(hostname -s)")"
+}
+
+set_cache_name()
+{
+    TMP_KRB_CCACHE_NAME="$(mktemp | sed "s/^/FILE:/")"
+    export KRB5CCNAME="$TMP_KRB_CCACHE_NAME"
+}
+
+host_kinit()
+{   
+    output="$(kinit -k "$UPPER_HOST_NAME"\$@"$DOMAIN_REALM" 2>&1)" || \
+                                                     (echo  "$output" && exit 1)
+}
+
+main()
+{   
+    check_req
+    get_domain_realm
+    get_host_name
+    set_cache_name
+    host_kinit
+
+    register_result="$(net ads dns register --force \
+                                           --use-kerberos=required \
+                                           --use-krb5-ccache="$KRB5CCNAME" "$FQDN_NAME" 2>&1)" || \
+                                            (echo  "$register_result" && kdestroy -A &>/dev/null && unset KRB5CCNAME && exit 1)
+    echo $register_result
+    # Destroy tmp cache
+    kdestroy -A &>/dev/null
+    unset KRB5CCNAME
+}
+
+main
